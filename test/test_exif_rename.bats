@@ -55,9 +55,8 @@ BIN="${BATS_TEST_DIRNAME}/../bin"
   run "${BIN}/exif-rename" "$dir" "*.jpg"
   [ "$status" -eq 0 ]
   # Should produce 0 commands (file already has datestamp prefix)
-  # shellcheck disable=SC2126
   local touch_count
-  touch_count=$(echo "$output" | grep "^touch" | wc -l)
+  touch_count=$(echo "$output" | grep -c "^touch")
   touch_count=${touch_count// /}
   [ "$touch_count" -eq 0 ]
 }
