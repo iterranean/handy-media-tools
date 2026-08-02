@@ -2,9 +2,9 @@
 # Usage: $0 'DIRECTORY' 'PATTERN' [> touch.sh]
 # Generates a list of commands to set file mtime/atime from EXIF creation date.
 
-directory="${1:-$(pwd)}"
-pattern="${2:-*}"
-[ -z "$pattern" ] && { echo "Usage: $0 'DIRECTORY' 'PATTERN'" >&2; exit 1; }
+directory="${1:-}"
+pattern="${2:-}"
+[ -z "$directory" ] || [ -z "$pattern" ] && { echo "Usage: $0 'DIRECTORY' 'PATTERN'" >&2; exit 1; }
 
 datestamp_cmd="$(dirname "$0")/exif-datestamp"
 
