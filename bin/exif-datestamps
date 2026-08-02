@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Usage: $0 'DIRECTORY' 'PATTERN' [> datestamps.txt]
+# Generates a list of EXIF timestamps for files matching PATTERN in DIRECTORY.
+
+directory="${1:-$(pwd)}"
+pattern="${2:-*}"
+[ -z "$pattern" ] && { echo "Usage: $0 'DIRECTORY' 'PATTERN'" >&2; exit 1; }
+
+datestamp_cmd="$(dirname "$0")/exif-datestamp"
+
+find "$directory" -name "$pattern" -type f ! -name '._*' -print0 | while IFS= read -r -d '' f; do
+  ts=$("$datestamp_cmd" "$f") || continue
+  printf "%s: '%s'\n" "$ts" "$f"
+done

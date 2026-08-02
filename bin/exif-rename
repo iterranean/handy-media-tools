@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Usage: $0 'DIRECTORY' 'PATTERN' [> rename.sh]
+# Generates a list of commands to rename files based on their EXIF DateTimeOriginal metadata.
+
+directory="${1:-$(pwd)}"
+pattern="${2:-*}"
+[ -z "$pattern" ] && { echo "Usage: $0 'DIRECTORY' 'PATTERN'" >&2; exit 1; }
+
+datestamp_cmd="$(dirname "$0")/exif-datestamp"
+
+find "$directory" -name "$pattern" -type f ! -name '._*' -print0 | while IFS= read -r -d '' f; do
+  ts=$("$datestamp_cmd" "$f") || continue
+  subdir=$(dirname "$f")
+  filename=$(basename "$f")
+  case "$filename" in
+    "$ts"-*) echo "# SKIP: '$f' already has datestamp" >&2; continue ;;
+  esac
+  touch_ts="${ts%-*}${ts#*-}"
+  touch_ts="${touch_ts:0:8}${touch_ts:8:4}.${touch_ts:12:2}"
+  printf "touch -a -m -t '%s' '%s' && mv '%s' '%s/%s-%s'\n" "$touch_ts" "$f" "$f" "$subdir" "$ts" "$filename"
+done

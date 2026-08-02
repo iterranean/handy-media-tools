@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Usage: $0 FILE
+# Prints FILE's EXIF DateTimeOriginal/CreateDate as YYYYMMDD-HHMMSS, or exits 1 if absent.
+
+file="$1"
+[ -z "$file" ] && { echo "Usage: $0 FILE" >&2; exit 1; }
+
+ts=$(exiftool -DateTimeOriginal -CreateDate -d "%Y%m%d-%H%M%S" -s3 -f "$file" | grep -m1 -v '^-$')
+[ -z "$ts" ] && exit 1
+printf '%s\n' "$ts"
