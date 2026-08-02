@@ -29,6 +29,23 @@ gh attestation verify handy-media-tools-vX.Y.Z.tar.gz --owner <owner>
 
 ## Use
 
+- Compare two directories, finding matching/renamed/moved files:
+
+  ```sh
+  ./bin/exif-compare 'DIR_LEFT' 'DIR_RIGHT'
+  ./bin/exif-compare 'DIR_LEFT' 'DIR_RIGHT' --assure        # also compare SHA checksums
+  ./bin/exif-compare 'DIR_LEFT' 'DIR_RIGHT' --summary-only  # just the summary line
+  ```
+
+  Matches by a hierarchy of cost:
+
+  1. Exact relative path (cheapest)
+  1. Filename + size (same name, possibly different subdir)
+  1. Filename + EXIF datestamp (same name & capture time)
+  1. SHA-256 checksum (expensive — only with `--assure`)
+
+  Unmatched files are shown first; matched/duplicate pairs at the end.
+
 - Extract a single file's EXIF timestamp:
 
   ```sh

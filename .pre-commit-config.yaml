@@ -17,7 +17,6 @@ repos:
       - id: semgrep
         args:
           - '--config=auto'
-        language: system
         pass_filenames: false
         always_run: true
 

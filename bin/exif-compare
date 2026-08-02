@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+#
+# Usage: $0 'LEFT_DIR' 'RIGHT_DIR' [--assure] [--summary-only]
+#
+# Compare two directories, matching files by a hierarchy of cost:
+#   1. Exact relative path  (cheapest — name + subdir match)
+#   2. Filename + size      (same basename, possibly different subdir)
+#   3. Filename + EXIF datestamp (same name & capture time)
+#   4. SHA-256 checksum     (expensive — only with --assure)
+#
+# Output: unmatched files first (left-only, then right-only),
+#         matched / duplicate pairs at the end.
+
+set -euo pipefail
+
+# --- helpers ---
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") 'LEFT_DIR' 'RIGHT_DIR' [--assure] [--summary-only]
+
+Compare two directories, matching files by a hierarchy of cost:
+  1. Exact relative path  (cheapest — name + subdir match)
+  2. Filename + size      (same basename, possibly different subdir)
+  3. Filename + EXIF datestamp (same name & capture time)
+  4. SHA-256 checksum     (expensive — only with --assure)
+
+Options:
+  --assure         Run expensive checks (size, EXIF, SHA) to confirm matches
+  --summary-only   Show only the summary, skip detailed output
+  -h, --help       Show this help message
+EOF
+  exit 0
+}
+
+extract_exif_ts() {
+  exiftool -DateTimeOriginal -CreateDate -d "%Y%m%d-%H%M%S" -s3 -f "$1" 2>/dev/null |
+    grep -m1 -v '^-$' || true
+}
+
+file_sha256() {
+  if command -v sha256sum &>/dev/null; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum &>/dev/null; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "ERROR: sha256sum or shasum not found" >&2
+    exit 1
+  fi
+}
+
+# --- argument parsing ---
+
+left_dir=""
+right_dir=""
+assure=false
+summary_only=false
+positional=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage ;;
+    --assure) assure=true; shift ;;
+    --summary-only) summary_only=true; shift ;;
+    --) shift; break ;;
+    *)
+      if [ $positional -eq 0 ]; then
+        left_dir="$1"
+        positional=1
+      elif [ $positional -eq 1 ]; then
+        right_dir="$1"
+        positional=2
+      fi
+      shift ;;
+  esac
+done
+
+[ -z "$left_dir" ] && { echo "ERROR: left directory required" >&2; exit 1; }
+[ -z "$right_dir" ] && { echo "ERROR: right directory required" >&2; exit 1; }
+[ ! -d "$left_dir" ] && { echo "ERROR: '$left_dir' is not a directory" >&2; exit 1; }
+[ ! -d "$right_dir" ] && { echo "ERROR: '$right_dir' is not a directory" >&2; exit 1; }
+
+# --- discover files (newline-delimited, safe for typical media filenames) ---
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+(cd "$left_dir" && find . -type f ! -name '._*' | sed 's|^\./||') | sort > "$tmpdir/left.txt"
+(cd "$right_dir" && find . -type f ! -name '._*' | sed 's|^\./||') | sort > "$tmpdir/right.txt"
+
+right_count=$(wc -l < "$tmpdir/right.txt")
+
+# --- build lookup files ---
+
+# left_name_size: "basename<TAB>size<TAB>index"
+: > "$tmpdir/left_name_size.txt"
+# left_name_exif: "basename<TAB>exif_ts<TAB>index"
+: > "$tmpdir/left_name_exif.txt"
+# left_path_index: "relpath<TAB>index" — exact path lookup
+: > "$tmpdir/left_path_index.txt"
+
+idx=0
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  bn=$(basename "$f")
+  sz=$(stat -f%z "$left_dir/$f" 2>/dev/null || echo 0)
+  exif=$(extract_exif_ts "$left_dir/$f")
+
+  printf '%s\t%s\t%s\n' "$bn" "$sz" "$idx" >> "$tmpdir/left_name_size.txt"
+  if [ -n "$exif" ]; then
+    printf '%s\t%s\t%s\n' "$bn" "$exif" "$idx" >> "$tmpdir/left_name_exif.txt"
+  fi
+  printf '%s\t%s\n' "$f" "$idx" >> "$tmpdir/left_path_index.txt"
+  idx=$((idx + 1))
+done < "$tmpdir/left.txt"
+
+total_left=$idx
+
+# --- matching ---
+
+# Track which left indices have been used
+: > "$tmpdir/left_used.txt"
+: > "$tmpdir/matches.txt"     # "left_idx<TAB>right_idx<TAB>cost"
+: > "$tmpdir/unmatched_right.txt"  # right indices
+
+match_file_count=0
+
+if [ "$right_count" -gt 0 ]; then
+for ri in $(seq 0 $((right_count - 1))); do
+  rf=$(sed -n "$((ri + 1))p" "$tmpdir/right.txt")
+  [ -z "$rf" ] && continue
+  rbn=$(basename "$rf")
+  rsz=$(stat -f%z "$right_dir/$rf" 2>/dev/null || echo 0)
+  rexif=$(extract_exif_ts "$right_dir/$rf")
+
+  matched=false
+  matched_li=""
+
+  # cost 1: exact relative path
+  if ! $matched; then
+    li=$(awk -F'\t' -v p="$rf" '$1 == p {print $2}' "$tmpdir/left_path_index.txt")
+    if [ -n "$li" ] && ! grep -qx "$li" "$tmpdir/left_used.txt"; then
+      matched=true
+      matched_li="$li"
+    fi
+  fi
+
+  # cost 2: same name + same size
+  if ! $matched; then
+    while IFS=$'\t' read -r _bn _sz li; do
+      if ! grep -qx "$li" "$tmpdir/left_used.txt"; then
+        matched=true
+        matched_li="$li"
+        break
+      fi
+    done < <(awk -F'\t' -v bn="$rbn" -v sz="$rsz" '$1 == bn && $2 == sz' "$tmpdir/left_name_size.txt")
+  fi
+
+  # cost 3: same name + same EXIF
+  if ! $matched && [ -n "$rexif" ]; then
+    while IFS=$'\t' read -r _bn _exif li; do
+      if ! grep -qx "$li" "$tmpdir/left_used.txt"; then
+        matched=true
+        matched_li="$li"
+        break
+      fi
+    done < <(awk -F'\t' -v bn="$rbn" -v ex="$rexif" '$1 == bn && $2 == ex' "$tmpdir/left_name_exif.txt")
+  fi
+
+  # cost 4: SHA-256 (only with --assure)
+  if ! $matched && $assure; then
+    rhash=$(file_sha256 "$right_dir/$rf")
+    while IFS=$'\t' read -r li; do
+      if ! grep -qx "$li" "$tmpdir/left_used.txt"; then
+        lhash=$(file_sha256 "$left_dir/$(sed -n "$((li + 1))p" "$tmpdir/left.txt")")
+        if [ "$lhash" = "$rhash" ]; then
+          matched=true
+          matched_li="$li"
+          break
+        fi
+      fi
+    done < <(awk -F'\t' '{print $2}' "$tmpdir/left_path_index.txt")
+  fi
+
+  if $matched; then
+    printf '%s\t%s\t%s\n' "$matched_li" "$ri" "cost" >> "$tmpdir/matches.txt"
+    echo "$matched_li" >> "$tmpdir/left_used.txt"
+    match_file_count=$((match_file_count + 1))
+  else
+    echo "$ri" >> "$tmpdir/unmatched_right.txt"
+  fi
+done
+fi
+
+# left files never matched
+: > "$tmpdir/unmatched_left.txt"
+if [ "$total_left" -gt 0 ]; then
+for li in $(seq 0 $((total_left - 1))); do
+  if ! grep -qx "$li" "$tmpdir/left_used.txt" 2>/dev/null; then
+    echo "$li" >> "$tmpdir/unmatched_left.txt"
+  fi
+done
+fi
+
+# --- output ---
+
+if ! $summary_only; then
+
+  # unmatched left
+  if [ -s "$tmpdir/unmatched_left.txt" ]; then
+    echo "# Left only ($(wc -l < "$tmpdir/unmatched_left.txt" | tr -d ' '))"
+    while IFS= read -r li; do
+      echo "  - $(sed -n "$((li + 1))p" "$tmpdir/left.txt")"
+    done < "$tmpdir/unmatched_left.txt"
+    echo ""
+  fi
+
+  # unmatched right
+  if [ -s "$tmpdir/unmatched_right.txt" ]; then
+    echo "# Right only ($(wc -l < "$tmpdir/unmatched_right.txt" | tr -d ' '))"
+    while IFS= read -r ri; do
+      echo "  + $(sed -n "$((ri + 1))p" "$tmpdir/right.txt")"
+    done < "$tmpdir/unmatched_right.txt"
+    echo ""
+  fi
+
+  # matched pairs (sorted by left path)
+  if [ -s "$tmpdir/matches.txt" ]; then
+    # Resolve costs: we need to recompute cost for display
+    # matches.txt has: left_idx<TAB>right_idx<TAB>placeholder
+    # Re-resolve cost for each match
+    : > "$tmpdir/matches_costed.txt"
+    while IFS=$'\t' read -r li ri _; do
+      lp=$(sed -n "$((li + 1))p" "$tmpdir/left.txt")
+      rp=$(sed -n "$((ri + 1))p" "$tmpdir/right.txt")
+      lbn=$(basename "$lp")
+      rbn=$(basename "$rp")
+      lsz=$(stat -f%z "$left_dir/$lp" 2>/dev/null || echo 0)
+      rsz=$(stat -f%z "$right_dir/$rp" 2>/dev/null || echo 0)
+
+      if [ "$lp" = "$rp" ]; then
+        cost="path"
+      elif [ "$lbn" = "$rbn" ] && [ "$lsz" = "$rsz" ]; then
+        cost="size"
+      else
+        # Check EXIF
+        lexif=$(extract_exif_ts "$left_dir/$lp")
+        rexif=$(extract_exif_ts "$right_dir/$rp")
+        if [ "$lbn" = "$rbn" ] && [ -n "$lexif" ] && [ -n "$rexif" ] && [ "$lexif" = "$rexif" ]; then
+          cost="exif"
+        else
+          cost="sha"
+        fi
+      fi
+      printf '%s\t%s\t%s\t%s\n' "$lp" "$li" "$rp" "$cost" >> "$tmpdir/matches_costed.txt"
+    done < "$tmpdir/matches.txt"
+
+    # sort by left path
+    sort -t$'\t' -k1,1 "$tmpdir/matches_costed.txt" > "$tmpdir/matches_sorted.txt"
+
+    # column width
+    max_left=$(awk -F'\t' '{print length($1)}' "$tmpdir/matches_sorted.txt" | sort -rn | head -1)
+    [ -z "$max_left" ] && max_left=0
+    max_left=$((max_left > 40 ? 40 : max_left))
+
+    echo "# Matched ($match_file_count)"
+    printf "%-${max_left}s  %-5s  %s\n" "LEFT" "COST" "RIGHT"
+    while IFS=$'\t' read -r lp _li rp cost; do
+      printf "%-${max_left}s  %-5s  %s\n" "$lp" "$cost" "$rp"
+    done < "$tmpdir/matches_sorted.txt"
+    echo ""
+  fi
+
+fi
+
+# --- summary ---
+
+n_left_only=$(wc -l < "$tmpdir/unmatched_left.txt" | tr -d ' ')
+n_right_only=$(wc -l < "$tmpdir/unmatched_right.txt" | tr -d ' ')
+
+echo "Summary: $match_file_count matched, $n_left_only missing on right, $n_right_only missing on left"
