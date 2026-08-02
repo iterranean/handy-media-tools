@@ -8,23 +8,8 @@ Small collection of handy shell scripts complimenting exiftool on Mac and Linux.
 - exiftool
 
 ```sh
-apt-get install exiftool
-brew install exiftool
-```
-
-## Development tools
-
-Install system tools and set up pre-commit hooks:
-
-```sh
-brew bundle
-pip install pre-commit && pre-commit install
-```
-
-For a signed release artifact (from a `v*` tag push to GitHub):
-
-```sh
-gh attestation verify handy-media-tools-vX.Y.Z.tar.gz --owner <owner>
+apt-get install exiftool    # debian based linux
+brew install exiftool       # macos homebrew
 ```
 
 ## Install
@@ -42,13 +27,12 @@ sha256sum -c handy-media-tools-SHA256SUMS.txt
 tar xzf handy-media-tools.tar.gz -C ~/.local/handy-media-tools --strip-components=1
 ```
 
-Add the install directory to your `PATH` (e.g. in `~/.zshrc` or `~/.bashrc`):
+Add the install directory to your `PATH` (e.g. in `~/.zshrc` or `~/.bashrc`).
+Then restart your shell or run `source ~/.zshrc`.
 
 ```sh
 export PATH="$HOME/.local/handy-media-tools:$PATH"
 ```
-
-Then restart your shell or run `source ~/.zshrc`.
 
 ## Use
 
@@ -92,3 +76,24 @@ Then restart your shell or run `source ~/.zshrc`.
   ```sh
   exif-touch . '*.jpg' > touch.sh && bash touch.sh
   ```
+
+## Development
+
+Install system tools and set up pre-commit hooks:
+
+```sh
+brew bundle
+pip install pre-commit && pre-commit install
+```
+
+Run tests:
+
+```sh
+bats --tap test
+```
+
+Check signed release artifact:
+
+```sh
+gh attestation verify handy-media-tools-vX.Y.Z.tar.gz --owner <owner>
+```

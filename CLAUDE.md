@@ -8,12 +8,17 @@ See [README.md](README.md) for what this repo is and how to install/run the scri
 
 ## Pre-commit
 
-Run `pre-commit run --all-files` before treating any change as complete; fix findings rather than skipping hooks.
+- Run `pre-commit run --all-files` before treating any change as complete; fix findings rather than skipping hooks.
+- Always run `bats --tap test` to test any scripts changes; fix findings.
 
 ## Architecture
 
-`bin/` contains Linux style small scripts.
+- `bin/` contains Linux style small scripts.
+- `test/` contains bats tests.
 
-## Pull Requests
+## Version Control.
 
-Never work on main branch, use feature branches and create pull requests to produce a release.
+- Never commit unless specifically asked.
+- Never work on main branch, use feature branches.
+- Create pull requests when asked.
+- When requested to commit must use semantic release decorators.
