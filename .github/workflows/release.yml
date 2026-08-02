@@ -18,7 +18,8 @@ jobs:
       - name: Package release artifact
         run: |
           tar czf "handy-media-tools-${GITHUB_REF_NAME}.tar.gz" bin README.md
-          sha256sum "handy-media-tools-${GITHUB_REF_NAME}.tar.gz" > SHA256SUMS
+          cp "handy-media-tools-${GITHUB_REF_NAME}.tar.gz" handy-media-tools.tar.gz
+          sha256sum handy-media-tools.tar.gz > SHA256SUMS
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4.1.1
@@ -30,4 +31,5 @@ jobs:
         with:
           files: |
             handy-media-tools-${{ github.ref_name }}.tar.gz
+            handy-media-tools.tar.gz
             SHA256SUMS
